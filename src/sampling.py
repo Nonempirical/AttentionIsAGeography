@@ -1,9 +1,10 @@
 """Sampling utilities."""
 
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.nn.functional as F
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from src.config import Config
 from src.model_loader import get_device, get_model, get_tokenizer
@@ -91,6 +92,8 @@ def sample_futures(
     max_new_tokens: int | None = None,
     num_samples: int | None = None,
     completion_mode: bool = False,
+    override_tokenizer: Optional[AutoTokenizer] = None,
+    override_model: Optional[AutoModelForCausalLM] = None,
 ) -> List[SampledSequence]:
     """
     Sample num_samples futures of length max_new_tokens from the HF model.
@@ -98,10 +101,14 @@ def sample_futures(
 
     Uses nucleus + temperature sampling via model.generate, then computes
     token-aligned logprobs for the generated continuation.
+    
+    Args:
+        override_tokenizer: If provided, use this tokenizer instead of the default
+        override_model: If provided, use this model instead of the default
     """
     device = get_device()
-    tokenizer = get_tokenizer()
-    model = get_model()
+    tokenizer = override_tokenizer if override_tokenizer is not None else get_tokenizer()
+    model = override_model if override_model is not None else get_model()
 
     logger.info(f"Sampling futures for prompt: {prompt!r}")
 

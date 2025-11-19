@@ -5,7 +5,7 @@ from typing import Optional
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-from src.config import Config
+from src.config import Config, MODEL_REGISTRY
 from src.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -94,3 +94,48 @@ def get_model() -> AutoModelForCausalLM:
     model.eval()
     _model = model
     return model
+
+
+def load_model_by_name(name: str) -> tuple[AutoTokenizer, AutoModelForCausalLM]:
+    """
+    Load a model and tokenizer by name from MODEL_REGISTRY.
+    
+    Args:
+        name: Model name from MODEL_REGISTRY
+        
+    Returns:
+        Tuple of (tokenizer, model)
+    """
+    if name not in MODEL_REGISTRY:
+        raise ValueError(f"Model '{name}' not found in MODEL_REGISTRY. Available: {list(MODEL_REGISTRY.keys())}")
+    
+    hf_id = MODEL_REGISTRY[name]
+    device = get_device()
+    
+    logger.info(f"Loading model '{name}' ({hf_id})")
+    
+    # Load tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(hf_id)
+    if tokenizer.pad_token is None:
+        if tokenizer.eos_token is not None:
+            tokenizer.pad_token = tokenizer.eos_token
+        else:
+            tokenizer.add_special_tokens({"pad_token": "<|pad|>"})
+    
+    # Load model
+    dtype = torch.float16 if device.type == "cuda" else torch.float32
+    model = AutoModelForCausalLM.from_pretrained(
+        hf_id,
+        torch_dtype=dtype,
+        device_map=None,  # we move manually
+    )
+    
+    # Resize embeddings if needed
+    if model.get_input_embeddings().num_embeddings < len(tokenizer):
+        logger.info("Resizing token embeddings to match tokenizer length")
+        model.resize_token_embeddings(len(tokenizer))
+    
+    model.to(device)
+    model.eval()
+    
+    return tokenizer, model

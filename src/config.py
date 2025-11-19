@@ -2,6 +2,14 @@
 
 from dataclasses import dataclass
 
+# Model registry for comparison feature
+MODEL_REGISTRY = {
+    "Phi-3": "microsoft/Phi-3-mini-4k-instruct",
+    "LLaMA-3 8B": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+    "Mistral 7B": "mistralai/Mistral-7B-Instruct-v0.3",
+    "Qwen2 7B": "Qwen/Qwen2-7B-Instruct",
+}
+
 
 @dataclass
 class Config:
