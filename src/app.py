@@ -154,36 +154,39 @@ def build_geography_compare(
     num_samples: int | None = None,
     completion_mode: bool = False,
     show_rivers: bool = True,
-) -> tuple[Any, Any]:
+):
     """
-    Build comparative geographies for two models on the same prompt.
+    Build two geographies for the same prompt using two different models.
 
     Returns:
-        fig_a: 3D figure for model A
-        fig_b: 3D figure for model B
+        fig_a, fig_b
     """
-    # Load both models
-    tok_a, model_a = load_model_by_name(model_name_a)
-    tok_b, model_b = load_model_by_name(model_name_b)
+    logger.info(
+        f"Comparing models for prompt {prompt!r}: A={model_name_a}, B={model_name_b}"
+    )
 
-    # Compute both geographies
+    # Load models + tokenizers
+    tokenizer_a, model_a = load_model_by_name(model_name_a)
+    tokenizer_b, model_b = load_model_by_name(model_name_b)
+
+    # Use the same core pipeline, but override model/tokenizer for each side
     fig_a = build_geography_for_prompt(
-        prompt,
+        prompt=prompt,
         max_new_tokens=max_new_tokens,
         num_samples=num_samples,
         completion_mode=completion_mode,
         show_rivers=show_rivers,
-        override_tokenizer=tok_a,
+        override_tokenizer=tokenizer_a,
         override_model=model_a,
     )
 
     fig_b = build_geography_for_prompt(
-        prompt,
+        prompt=prompt,
         max_new_tokens=max_new_tokens,
         num_samples=num_samples,
         completion_mode=completion_mode,
         show_rivers=show_rivers,
-        override_tokenizer=tok_b,
+        override_tokenizer=tokenizer_b,
         override_model=model_b,
     )
 
@@ -370,6 +373,9 @@ def create_model_compare_app() -> gr.Interface:
     Gradio interface to compare geographies for two models on the same prompt.
     Returns two plots: fig_A, fig_B.
     """
+
+    model_choices = list(MODEL_REGISTRY.keys())
+
     def _wrapped_compare(
         prompt: str,
         model_name_a: str,
@@ -379,7 +385,7 @@ def create_model_compare_app() -> gr.Interface:
         completion_mode: bool,
         show_rivers: bool,
     ):
-        figs = build_geography_compare(
+        fig_a, fig_b = build_geography_compare(
             prompt=prompt,
             model_name_a=model_name_a,
             model_name_b=model_name_b,
@@ -388,7 +394,7 @@ def create_model_compare_app() -> gr.Interface:
             completion_mode=completion_mode,
             show_rivers=show_rivers,
         )
-        return figs
+        return fig_a, fig_b
 
     iface = gr.Interface(
         fn=_wrapped_compare,
@@ -396,31 +402,31 @@ def create_model_compare_app() -> gr.Interface:
             gr.Textbox(
                 lines=2,
                 label="Prompt",
-                value="The dog",
+                value="There once was a girl",
                 placeholder="Type a prompt for the language model...",
             ),
             gr.Dropdown(
-                choices=list(MODEL_REGISTRY.keys()),
+                choices=model_choices,
                 label="Model A",
-                value=list(MODEL_REGISTRY.keys())[0] if MODEL_REGISTRY else None,
+                value=model_choices[0] if model_choices else None,
             ),
             gr.Dropdown(
-                choices=list(MODEL_REGISTRY.keys()),
+                choices=model_choices,
                 label="Model B",
-                value=list(MODEL_REGISTRY.keys())[1] if len(MODEL_REGISTRY) > 1 else list(MODEL_REGISTRY.keys())[0] if MODEL_REGISTRY else None,
+                value=model_choices[1] if len(model_choices) > 1 else model_choices[0],
             ),
             gr.Slider(
                 minimum=5,
                 maximum=60,
                 step=5,
-                value=Config.MAX_NEW_TOKENS,
+                value=20,
                 label="Max new tokens (horizon)",
             ),
             gr.Slider(
                 minimum=8,
-                maximum=256,
+                maximum=128,
                 step=8,
-                value=Config.NUM_SAMPLES,
+                value=32,
                 label="Number of futures (samples)",
             ),
             gr.Checkbox(
@@ -433,15 +439,15 @@ def create_model_compare_app() -> gr.Interface:
             ),
         ],
         outputs=[
-            gr.Plot(label="Geography Model A"),
-            gr.Plot(label="Geography Model B"),
+            gr.Plot(label="Geography A"),
+            gr.Plot(label="Geography B"),
         ],
         title="Attention Is a Geography — Model Comparison",
         description=(
-            "Compare the semantic probability landscapes of two models on the same prompt. "
-            "See how different models explore the semantic space differently."
+            "Compare how two language models explore the semantic future landscape for the same prompt."
         ),
     )
+
     return iface
 
 
