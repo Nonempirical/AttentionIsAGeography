@@ -13,6 +13,36 @@ from src.utils.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
+def _truncate_to_completion(text: str) -> str:
+    """
+    Heuristic: cut the continuation at the first 'completion-like' boundary.
+
+    We look for:
+      - double newline (paragraph break)
+      - sentence-ending punctuation followed by a space: ". ", "? ", "! "
+
+    If none found, return the text as-is.
+    """
+    text = text.strip()
+    if not text:
+        return text
+
+    # Priority: paragraph break
+    para_idx = text.find("\n\n")
+    if para_idx != -1:
+        return text[:para_idx].strip()
+
+    # Sentence-like boundaries
+    for boundary in [". ", "? ", "! "]:
+        idx = text.find(boundary)
+        if idx != -1:
+            # keep the punctuation
+            cut = idx + len(boundary.strip())
+            return text[:cut].strip()
+
+    return text
+
+
 def _compute_logprobs_for_generated(
     input_ids: torch.Tensor,
     generated_ids: torch.Tensor,
@@ -56,9 +86,15 @@ def _compute_logprobs_for_generated(
     return new_token_logprobs
 
 
-def sample_futures(prompt: str) -> List[SampledSequence]:
+def sample_futures(
+    prompt: str,
+    max_new_tokens: int | None = None,
+    num_samples: int | None = None,
+    completion_mode: bool = False,
+) -> List[SampledSequence]:
     """
-    Sample NUM_SAMPLES futures of length MAX_NEW_TOKENS from the HF model.
+    Sample num_samples futures of length max_new_tokens from the HF model.
+    If max_new_tokens/num_samples are None, fall back to Config defaults.
 
     Uses nucleus + temperature sampling via model.generate, then computes
     token-aligned logprobs for the generated continuation.
@@ -74,14 +110,20 @@ def sample_futures(prompt: str) -> List[SampledSequence]:
     input_ids = enc["input_ids"].to(device)
     prompt_length = input_ids.size(1)
 
+    if max_new_tokens is None:
+        max_new_tokens = Config.MAX_NEW_TOKENS
+
+    if num_samples is None:
+        num_samples = Config.NUM_SAMPLES
+
     # Generate multiple sequences
     gen_kwargs = dict(
-        max_new_tokens=Config.MAX_NEW_TOKENS,
+        max_new_tokens=max_new_tokens,
         do_sample=True,
         temperature=Config.TEMPERATURE,
         top_p=Config.TOP_P,
         top_k=Config.TOP_K,
-        num_return_sequences=Config.NUM_SAMPLES,
+        num_return_sequences=num_samples,
         pad_token_id=tokenizer.pad_token_id,
         eos_token_id=tokenizer.eos_token_id,
     )
@@ -92,10 +134,10 @@ def sample_futures(prompt: str) -> List[SampledSequence]:
             **gen_kwargs,
         )
 
-    # generated shape: (NUM_SAMPLES, L_total)
+    # generated shape: (num_samples, L_total)
     sequences: List[SampledSequence] = []
 
-    for seq_idx in range(Config.NUM_SAMPLES):
+    for seq_idx in range(num_samples):
         seq_ids = generated[seq_idx : seq_idx + 1]  # shape (1, L_total)
 
         full_ids = seq_ids[0].tolist()
@@ -105,6 +147,9 @@ def sample_futures(prompt: str) -> List[SampledSequence]:
         # Decode texts
         full_text = tokenizer.decode(full_ids, skip_special_tokens=True)
         completion_text = tokenizer.decode(completion_ids, skip_special_tokens=True)
+
+        if completion_mode:
+            completion_text = _truncate_to_completion(completion_text)
 
         # Compute logprobs for generated tokens
         logprobs = _compute_logprobs_for_generated(

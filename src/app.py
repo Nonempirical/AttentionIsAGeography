@@ -1,7 +1,8 @@
 """Gradio application for Attention Is a Geography visualization."""
 
-from typing import Any
+from typing import Any, Tuple
 
+import numpy as np
 import gradio as gr
 
 from src.config import Config
@@ -10,32 +11,51 @@ from src.landscape import build_probability_field
 from src.projection import project_prefixes_to_2d, project_to_2d
 from src.rivers import group_rivers_by_sequence
 from src.sampling import sample_futures
+from src.types import RiverPoint, SampledSequence
 from src.utils.logging_utils import get_logger
 from src.viz import make_geography_figure
 
 logger = get_logger(__name__)
 
 
-def build_geography_for_prompt(prompt: str) -> Any:
+def _compute_geography_components(
+    prompt: str,
+    max_new_tokens: int | None = None,
+    num_samples: int | None = None,
+    completion_mode: bool = False,
+) -> Tuple[
+    np.ndarray,  # X
+    np.ndarray,  # Y
+    np.ndarray,  # Z
+    np.ndarray,  # coords
+    np.ndarray,  # weights
+    dict[int, list[RiverPoint]],  # rivers
+    list[SampledSequence],  # samples
+]:
     """
-    High-level pipeline:
-
-      1) Sample futures from the language model.
-      2) Embed full sequences.
-      3) Project to 2D and compute weights.
-      4) Build probability field over 2D plane.
-      5) Embed prefixes.
-      6) Project prefixes to 2D using same projector.
-      7) Group prefixes into semantic rivers.
-      8) Build Plotly 3D figure.
+    Core pipeline without figure construction.
+    Returns all components needed to build figures or do comparisons.
     """
-    logger.info(f"Building geography for prompt: {prompt!r}")
+    logger.info(f"Building geography components for prompt: {prompt!r}")
 
     # 1) Sample futures
-    samples = sample_futures(prompt)
+    samples = sample_futures(
+        prompt,
+        max_new_tokens=max_new_tokens,
+        num_samples=num_samples,
+        completion_mode=completion_mode,
+    )
     if not samples:
         logger.warning("No samples returned from sampling.")
-        return None
+        return (
+            np.array([]),
+            np.array([]),
+            np.array([]),
+            np.array([]),
+            np.array([]),
+            {},
+            [],
+        )
 
     # 2) Embed full sequences
     embeddings, seq_ids = embed_full_sequences(samples)
@@ -50,8 +70,6 @@ def build_geography_for_prompt(prompt: str) -> Any:
     prefix_embeddings, prefix_seq_ids, positions = embed_prefixes(samples)
 
     # 6) Project prefixes to 2D
-    from src.types import RiverPoint  # ensure imported; not strictly needed here
-
     river_points = project_prefixes_to_2d(
         prefix_embeddings,
         prefix_seq_ids,
@@ -60,13 +78,43 @@ def build_geography_for_prompt(prompt: str) -> Any:
         weights,
     )
 
-    # 7) Group into rivers
+    # 7) Group rivers
     rivers = group_rivers_by_sequence(river_points)
 
-    # Build hover texts for futures: short preview + weight
-    hover_texts = []
+    return X, Y, Z, coords, weights, rivers, samples
+
+
+def build_geography_for_prompt(
+    prompt: str,
+    max_new_tokens: int | None = None,
+    num_samples: int | None = None,
+    completion_mode: bool = False,
+    show_rivers: bool = True,
+) -> Any:
+    """
+    High-level pipeline for a single prompt.
+    """
+    (
+        X,
+        Y,
+        Z,
+        coords,
+        weights,
+        rivers,
+        samples,
+    ) = _compute_geography_components(
+        prompt=prompt,
+        max_new_tokens=max_new_tokens,
+        num_samples=num_samples,
+        completion_mode=completion_mode,
+    )
+
+    if X.size == 0:
+        return None
+
+    # Build hover texts
+    hover_texts: list[str] = []
     for sample, w in zip(samples, weights):
-        # Shorten long completions for hover
         snippet = sample.completion.replace("\n", " ")
         if len(snippet) > 200:
             snippet = snippet[:197] + "..."
@@ -75,9 +123,127 @@ def build_geography_for_prompt(prompt: str) -> Any:
             f"weight={w:.4f}<br><br><b>Prompt:</b> {sample.prompt}<br><br><b>Completion:</b> {snippet}"
         )
 
-    # 8) Build figure
-    fig = make_geography_figure(X, Y, Z, coords, weights, rivers, hover_texts)
+    fig = make_geography_figure(
+        X,
+        Y,
+        Z,
+        coords,
+        weights,
+        rivers,
+        hover_texts,
+        show_rivers=show_rivers,
+    )
     return fig
+
+
+def build_geography_diff(
+    prompt_a: str,
+    prompt_b: str,
+    max_new_tokens: int | None = None,
+    num_samples: int | None = None,
+) -> tuple[Any, Any, Any]:
+    """
+    Build comparative geographies for two prompts A and B.
+
+    Returns:
+        fig_a: 3D figure for prompt A
+        fig_b: 3D figure for prompt B
+        fig_diff: 3D figure of Z_B - Z_A on shared grid
+    """
+    # Compute components for both prompts
+    (
+        X_a,
+        Y_a,
+        Z_a,
+        coords_a,
+        weights_a,
+        rivers_a,
+        samples_a,
+    ) = _compute_geography_components(
+        prompt=prompt_a,
+        max_new_tokens=max_new_tokens,
+        num_samples=num_samples,
+    )
+
+    (
+        X_b,
+        Y_b,
+        Z_b,
+        coords_b,
+        weights_b,
+        rivers_b,
+        samples_b,
+    ) = _compute_geography_components(
+        prompt=prompt_b,
+        max_new_tokens=max_new_tokens,
+        num_samples=num_samples,
+    )
+
+    if X_a.size == 0 or X_b.size == 0:
+        return None, None, None
+
+    # For simplicity, assume grids are compatible (same shape & ranges).
+    # If not, we could resample, but for now we rely on similar sampling.
+    if X_a.shape != X_b.shape:
+        logger.warning("Grid shapes differ between A and B; cannot compute diff surface reliably.")
+        X_a, Y_a, Z_a = X_b, Y_b, Z_b  # crude fallback
+
+    # Hover texts
+    hover_a: list[str] = []
+    for sample, w in zip(samples_a, weights_a):
+        snippet = sample.completion.replace("\n", " ")
+        if len(snippet) > 200:
+            snippet = snippet[:197] + "..."
+
+        hover_a.append(
+            f"[A] weight={w:.4f}<br><br><b>Prompt:</b> {sample.prompt}<br><br><b>Completion:</b> {snippet}"
+        )
+
+    hover_b: list[str] = []
+    for sample, w in zip(samples_b, weights_b):
+        snippet = sample.completion.replace("\n", " ")
+        if len(snippet) > 200:
+            snippet = snippet[:197] + "..."
+
+        hover_b.append(
+            f"[B] weight={w:.4f}<br><br><b>Prompt:</b> {sample.prompt}<br><br><b>Completion:</b> {snippet}"
+        )
+
+    # Figures for A and B
+    fig_a = make_geography_figure(X_a, Y_a, Z_a, coords_a, weights_a, rivers_a, hover_a)
+    fig_a.update_layout(title=f"Geography A: {prompt_a}")
+
+    fig_b = make_geography_figure(X_b, Y_b, Z_b, coords_b, weights_b, rivers_b, hover_b)
+    fig_b.update_layout(title=f"Geography B: {prompt_b}")
+
+    # Difference surface Z_diff = Z_b - Z_a
+    Z_diff = Z_b - Z_a
+
+    import plotly.graph_objects as go
+
+    surface_diff = go.Surface(
+        x=X_a,
+        y=Y_a,
+        z=Z_diff,
+        showscale=True,
+        colorscale="RdBu",
+        name="Z_B - Z_A",
+    )
+
+    fig_diff = go.Figure(
+        data=[surface_diff],
+        layout=go.Layout(
+            title="Difference geography (B - A)",
+            scene=dict(
+                xaxis_title="Semantic X",
+                yaxis_title="Semantic Y",
+                zaxis_title="ΔProbability",
+            ),
+            margin=dict(l=0, r=0, t=40, b=0),
+        ),
+    )
+
+    return fig_a, fig_b, fig_diff
 
 
 def create_gradio_app() -> gr.Interface:
@@ -87,23 +253,116 @@ def create_gradio_app() -> gr.Interface:
       - Runs build_geography_for_prompt.
       - Shows the 3D Plotly figure.
     """
-    def _wrapped(prompt: str):
-        fig = build_geography_for_prompt(prompt)
+    def _wrapped(
+        prompt: str,
+        max_new_tokens: int,
+        num_samples: int,
+        completion_mode: bool,
+        show_rivers: bool,
+    ):
+        fig = build_geography_for_prompt(
+            prompt,
+            max_new_tokens=max_new_tokens,
+            num_samples=num_samples,
+            completion_mode=completion_mode,
+            show_rivers=show_rivers,
+        )
         return fig
 
     iface = gr.Interface(
         fn=_wrapped,
-        inputs=gr.Textbox(
-            lines=2,
-            label="Prompt",
-            value="The dog",
-            placeholder="Type a prompt for the language model...",
-        ),
+        inputs=[
+            gr.Textbox(
+                lines=2,
+                label="Prompt",
+                value="The dog",
+                placeholder="Type a prompt for the language model...",
+            ),
+            gr.Slider(
+                minimum=5,
+                maximum=60,
+                step=5,
+                value=Config.MAX_NEW_TOKENS,
+                label="Max new tokens (horizon)",
+            ),
+            gr.Slider(
+                minimum=8,
+                maximum=256,
+                step=8,
+                value=Config.NUM_SAMPLES,
+                label="Number of futures (samples)",
+            ),
+            gr.Checkbox(
+                label="Completion mode (stop at first answer/sentence)",
+                value=False,
+            ),
+            gr.Checkbox(
+                label="Show semantic rivers",
+                value=True,
+            ),
+        ],
         outputs=gr.Plot(label="Attention Is a Geography"),
         title="Attention Is a Geography",
         description=(
-            "Visualizing semantic futures and probability landscape ~20 tokens ahead "
+            "Visualizing semantic futures and probability landscape N tokens ahead "
             "for a given prompt."
+        ),
+    )
+    return iface
+
+
+def create_gradio_compare_app() -> gr.Interface:
+    """
+    Gradio interface to compare geographies for two prompts A and B.
+    Returns three plots: fig_A, fig_B, fig_diff.
+    """
+
+    def _wrapped(prompt_a: str, prompt_b: str, max_new_tokens: int, num_samples: int):
+        figs = build_geography_diff(
+            prompt_a=prompt_a,
+            prompt_b=prompt_b,
+            max_new_tokens=max_new_tokens,
+            num_samples=num_samples,
+        )
+        return figs
+
+    iface = gr.Interface(
+        fn=_wrapped,
+        inputs=[
+            gr.Textbox(
+                lines=2,
+                label="Prompt A",
+                value="The dog chased the ball",
+            ),
+            gr.Textbox(
+                lines=2,
+                label="Prompt B",
+                value="The cat climbed the tree",
+            ),
+            gr.Slider(
+                minimum=5,
+                maximum=60,
+                step=5,
+                value=Config.MAX_NEW_TOKENS,
+                label="Max new tokens (horizon)",
+            ),
+            gr.Slider(
+                minimum=8,
+                maximum=256,
+                step=8,
+                value=Config.NUM_SAMPLES,
+                label="Number of futures (samples)",
+            ),
+        ],
+        outputs=[
+            gr.Plot(label="Geography A"),
+            gr.Plot(label="Geography B"),
+            gr.Plot(label="Difference (B - A)"),
+        ],
+        title="Attention Is a Geography — Prompt Comparison",
+        description=(
+            "Compare the semantic probability landscapes of two prompts. "
+            "The difference plot shows where probability mass shifts from A to B."
         ),
     )
     return iface

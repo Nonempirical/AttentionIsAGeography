@@ -50,7 +50,8 @@ def make_geography_figure(
     coords: np.ndarray,
     weights: np.ndarray,
     rivers: Dict[int, List[RiverPoint]],
-    hover_texts: List[str],  # NEW
+    hover_texts: List[str],
+    show_rivers: bool = True,
 ) -> go.Figure:
     """
     Construct the 3D Plotly figure for "Attention Is a Geography":
@@ -114,27 +115,28 @@ def make_geography_figure(
     # --- Rivers ---
     river_traces: List[go.Scatter3d] = []
 
-    for seq_id, points in rivers.items():
-        if len(points) < 2:
-            continue
+    if show_rivers:
+        for seq_id, points in rivers.items():
+            if len(points) < 2:
+                continue
 
-        xs = np.array([p.x for p in points], dtype=float)
-        ys = np.array([p.y for p in points], dtype=float)
-        coords_path = np.column_stack([xs, ys])
-        zs = _interpolate_z_nearest(coords_path, X, Y, Z)
+            xs = np.array([p.x for p in points], dtype=float)
+            ys = np.array([p.y for p in points], dtype=float)
+            coords_path = np.column_stack([xs, ys])
+            zs = _interpolate_z_nearest(coords_path, X, Y, Z)
 
-        river_traces.append(
-            go.Scatter3d(
-                x=xs,
-                y=ys,
-                z=zs,
-                mode="lines",
-                line=dict(width=2),
-                name=f"river_{seq_id}",
-                hoverinfo="none",
-                showlegend=False,
+            river_traces.append(
+                go.Scatter3d(
+                    x=xs,
+                    y=ys,
+                    z=zs,
+                    mode="lines",
+                    line=dict(width=2),
+                    name=f"river_{seq_id}",
+                    hoverinfo="none",
+                    showlegend=False,
+                )
             )
-        )
 
     # --- Figure assembly ---
     data = [surface, endpoints] + river_traces
