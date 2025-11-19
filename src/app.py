@@ -63,8 +63,20 @@ def build_geography_for_prompt(prompt: str) -> Any:
     # 7) Group into rivers
     rivers = group_rivers_by_sequence(river_points)
 
+    # Build hover texts for futures: short preview + weight
+    hover_texts = []
+    for sample, w in zip(samples, weights):
+        # Shorten long completions for hover
+        snippet = sample.completion.replace("\n", " ")
+        if len(snippet) > 200:
+            snippet = snippet[:197] + "..."
+
+        hover_texts.append(
+            f"weight={w:.4f}<br><br><b>Prompt:</b> {sample.prompt}<br><br><b>Completion:</b> {snippet}"
+        )
+
     # 8) Build figure
-    fig = make_geography_figure(X, Y, Z, coords, weights, rivers)
+    fig = make_geography_figure(X, Y, Z, coords, weights, rivers, hover_texts)
     return fig
 
 

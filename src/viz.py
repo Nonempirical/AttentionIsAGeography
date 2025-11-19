@@ -50,6 +50,7 @@ def make_geography_figure(
     coords: np.ndarray,
     weights: np.ndarray,
     rivers: Dict[int, List[RiverPoint]],
+    hover_texts: List[str],  # NEW
 ) -> go.Figure:
     """
     Construct the 3D Plotly figure for "Attention Is a Geography":
@@ -63,10 +64,12 @@ def make_geography_figure(
         coords: (N, 2) array of full-sequence coordinates
         weights: (N,) array of normalized probabilities
         rivers: dict seq_id -> ordered list of RiverPoint
+        hover_texts: (N,) list of hover text strings for each endpoint
 
     Returns:
         Plotly Figure object.
     """
+    assert coords.shape[0] == len(hover_texts), "coords and hover_texts must align"
     logger.info("Building Plotly figure for geography visualization")
 
     # --- Surface ---
@@ -92,10 +95,20 @@ def make_geography_figure(
         marker=dict(
             size=marker_sizes,
             opacity=0.9,
+            color=weights,  # color by weight
+            colorscale="Viridis",
+            colorbar=dict(title="Futures"),
         ),
         name="Futures",
-        text=[f"w={w:.4f}" for w in weights],
-        hoverinfo="text",
+        text=hover_texts,  # <-- use completions here
+        hovertemplate=(
+            "<b>Future</b><br>"
+            "x=%{x:.2f}<br>"
+            "y=%{y:.2f}<br>"
+            "z=%{z:.4f}<br>"
+            "weight=%{marker.color:.4f}<br><br>"
+            "%{text}"
+        ),
     )
 
     # --- Rivers ---
