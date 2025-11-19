@@ -45,15 +45,20 @@ def _truncate_to_completion(text: str) -> str:
 
 
 def _compute_logprobs_for_generated(
+    model: AutoModelForCausalLM,
     input_ids: torch.Tensor,
     generated_ids: torch.Tensor,
     prompt_length: int,
 ) -> List[float]:
     """
+    Compute token-level logprobs for the generated continuation
+    using the *same* model that produced it.
+
     Given the full generated sequence (prompt + new tokens),
     compute log P(token_t | previous tokens) for each newly generated token.
 
     Args:
+        model: The model to use for computing logprobs (must be the same model that generated the sequence)
         input_ids: (1, L_prompt) original prompt ids
         generated_ids: (1, L_total) ids including prompt + new tokens
         prompt_length: length of original prompt (L_prompt)
@@ -61,8 +66,7 @@ def _compute_logprobs_for_generated(
     Returns:
         List[float] of length (L_total - L_prompt) with log probs for each new token.
     """
-    device = generated_ids.device
-    model = get_model()
+    model.eval()
 
     # We run the model on the full sequence (prompt + new tokens).
     with torch.no_grad():
@@ -160,6 +164,7 @@ def sample_futures(
 
         # Compute logprobs for generated tokens
         logprobs = _compute_logprobs_for_generated(
+            model=model,
             input_ids=input_ids,
             generated_ids=seq_ids,
             prompt_length=prompt_length,

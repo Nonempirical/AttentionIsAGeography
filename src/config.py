@@ -13,7 +13,7 @@ MODEL_REGISTRY = {
 @dataclass
 class Config:
     # HuggingFace model
-    HF_MODEL_NAME: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    HF_MODEL_NAME: str = "microsoft/Phi-3-mini-4k-instruct"
 
     # Device preference
     DEVICE: str = "auto"  # "auto", "cuda", or "cpu"
