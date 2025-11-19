@@ -1,0 +1,96 @@
+"""Model loading utilities."""
+
+from typing import Optional
+
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+from src.config import Config
+from src.utils.logging_utils import get_logger
+
+logger = get_logger(__name__)
+
+_tokenizer: Optional[AutoTokenizer] = None
+_model: Optional[AutoModelForCausalLM] = None
+_device: Optional[torch.device] = None
+
+
+def get_device() -> torch.device:
+    """
+    Resolve and cache the torch.device based on Config.DEVICE.
+    """
+    global _device
+    if _device is not None:
+        return _device
+
+    preferred = Config.DEVICE.lower()
+    if preferred == "cuda":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    elif preferred == "cpu":
+        device = torch.device("cpu")
+    else:
+        # "auto"
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        else:
+            device = torch.device("cpu")
+
+    logger.info(f"Using device: {device}")
+    _device = device
+    return device
+
+
+def get_tokenizer() -> AutoTokenizer:
+    """
+    Load and cache the AutoTokenizer for HF_MODEL_NAME.
+    """
+    global _tokenizer
+    if _tokenizer is not None:
+        return _tokenizer
+
+    logger.info(f"Loading tokenizer: {Config.HF_MODEL_NAME}")
+    tokenizer = AutoTokenizer.from_pretrained(
+        Config.HF_MODEL_NAME,
+    )
+    # Ensure we have a pad token
+    if tokenizer.pad_token is None:
+        if tokenizer.eos_token is not None:
+            tokenizer.pad_token = tokenizer.eos_token
+        else:
+            # Fallback: create a pad token id
+            tokenizer.add_special_tokens({"pad_token": "<|pad|>"})
+    _tokenizer = tokenizer
+    return tokenizer
+
+
+def get_model() -> AutoModelForCausalLM:
+    """
+    Load and cache the AutoModelForCausalLM for HF_MODEL_NAME.
+
+    Uses float16 on CUDA for efficiency.
+    """
+    global _model
+    if _model is not None:
+        return _model
+
+    device = get_device()
+
+    logger.info(f"Loading model: {Config.HF_MODEL_NAME} on device: {device}")
+    dtype = torch.float16 if device.type == "cuda" else torch.float32
+
+    model = AutoModelForCausalLM.from_pretrained(
+        Config.HF_MODEL_NAME,
+        torch_dtype=dtype,
+        device_map=None,  # we move manually
+    )
+
+    # If we added a pad token to tokenizer, we should also resize embeddings
+    tokenizer = get_tokenizer()
+    if model.get_input_embeddings().num_embeddings < len(tokenizer):
+        logger.info("Resizing token embeddings to match tokenizer length")
+        model.resize_token_embeddings(len(tokenizer))
+
+    model.to(device)
+    model.eval()
+    _model = model
+    return model
