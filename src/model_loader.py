@@ -63,24 +63,36 @@ def get_tokenizer() -> AutoTokenizer:
     return tokenizer
 
 
-def get_model() -> AutoModelForCausalLM:
+def get_model(override_name: str | None = None) -> AutoModelForCausalLM:
     """
     Load and cache the AutoModelForCausalLM for HF_MODEL_NAME.
 
-    Uses float16 on CUDA for efficiency.
+    Uses float16 on CUDA for efficiency, except for OpenAI OSS-20 models which use bfloat16.
+    
+    Args:
+        override_name: If provided, load this model instead of Config.HF_MODEL_NAME.
+                      Does not cache when override_name is provided.
     """
     global _model
-    if _model is not None:
+    if _model is not None and override_name is None:
         return _model
 
+    model_name = override_name or Config.HF_MODEL_NAME
     device = get_device()
 
-    logger.info(f"Loading model: {Config.HF_MODEL_NAME} on device: {device}")
-    dtype = torch.float16 if device.type == "cuda" else torch.float32
+    # Decide dtype per model
+    if "gpt-oss" in model_name.lower() or "oss-20" in model_name.lower():
+        # OpenAI OSS models prefer bfloat16
+        torch_dtype = torch.bfloat16
+    else:
+        # Default for other models
+        torch_dtype = torch.float16 if device.type == "cuda" else torch.float32
+
+    logger.info(f"Loading model: {model_name} on device: {device} with dtype={torch_dtype}")
 
     model = AutoModelForCausalLM.from_pretrained(
-        Config.HF_MODEL_NAME,
-        torch_dtype=dtype,
+        model_name,
+        torch_dtype=torch_dtype,
         device_map=None,  # we move manually
     )
 
@@ -92,7 +104,10 @@ def get_model() -> AutoModelForCausalLM:
 
     model.to(device)
     model.eval()
-    _model = model
+    
+    if override_name is None:
+        _model = model
+    
     return model
 
 
@@ -112,8 +127,6 @@ def load_model_by_name(name: str) -> tuple[AutoTokenizer, AutoModelForCausalLM]:
     hf_id = MODEL_REGISTRY[name]
     device = get_device()
     
-    logger.info(f"Loading model '{name}' ({hf_id})")
-    
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(hf_id)
     if tokenizer.pad_token is None:
@@ -122,11 +135,19 @@ def load_model_by_name(name: str) -> tuple[AutoTokenizer, AutoModelForCausalLM]:
         else:
             tokenizer.add_special_tokens({"pad_token": "<|pad|>"})
     
-    # Load model
-    dtype = torch.float16 if device.type == "cuda" else torch.float32
+    # Decide dtype per model
+    if "gpt-oss" in hf_id.lower() or "oss-20" in hf_id.lower():
+        # OpenAI OSS models prefer bfloat16
+        torch_dtype = torch.bfloat16
+    else:
+        # Default for other models
+        torch_dtype = torch.float16 if device.type == "cuda" else torch.float32
+    
+    logger.info(f"Loading model '{name}' ({hf_id}) on device: {device} with dtype={torch_dtype}")
+    
     model = AutoModelForCausalLM.from_pretrained(
         hf_id,
-        torch_dtype=dtype,
+        torch_dtype=torch_dtype,
         device_map=None,  # we move manually
     )
     
